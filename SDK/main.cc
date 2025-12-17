@@ -14,7 +14,6 @@
 #include "camera/cameraModule.h"
 #include "sensors/sensorsModule.h"
 
-
 sensorData sensor_data1 = {0, true};
 sensorData sensor_data2 = {0, true};
 cameraData camera_data = {{0}, true};
@@ -54,10 +53,10 @@ void write_camera_data_to_hardware(XIntrusion_checker *dev, int i, int j, u32 va
     return;
   }
 
-  int linear_index = (i * N) + j;
-  UINTPTR offset = 0x028 + (UINTPTR)linear_index * 8;
+  int linear_index = (i * N) + j; // Convert 2D index to linear index
+  UINTPTR offset = 0x028 + (UINTPTR)linear_index * 8; // Each entry is 8 bytes apart
 
-  XIntrusion_checker_WriteReg(dev->Ctrl_bus_BaseAddress, offset, value);
+  XIntrusion_checker_WriteReg(dev->Ctrl_bus_BaseAddress, offset, value); // Write the value to the calculated offset
 }
 
 void run_sensor_module() {
@@ -142,6 +141,7 @@ void handle_inactive_state() {
 }
 
 void handle_active_state() {
+  // The buttons are for advancing time and toggling auto-advance and is just for testing purposes
   u32 buttons = XGpio_DiscreteRead(&buttons_gpio, BUTTONS_CHANNEL);
 
   if ((buttons & 0x8) && !(prev_buttons & 0x8)) {
@@ -164,18 +164,22 @@ void handle_active_state() {
     advance_time(TIME_STEP_MS);
   }
 
+  // The actual alarm system logic starts here
+  // Run the sensor if the sampling interval has passed
   if ((now() >= SENSOR_SAMPLING_INTERVAL_MS + last_sensors_read_ms) && (now() != last_sensors_read_ms)) {
-    last_sensors_read_ms = now();
-    run_sensor_module();
+    last_sensors_read_ms = now(); // Update the last read time
+    run_sensor_module();          // Run the sensor module
     usleep(100);
+  }
+  // Run the camera if the sampling interval has passed
+  if ((now()) >= CAMERA_SAMPLING_INTERVAL_MS + last_camera_read_ms && (now() != last_camera_read_ms)) {
+    last_camera_read_ms = now(); // Update the last read time
+    run_camera_module();         // Run the camera module
+    usleep(100);
+    run_intrusion_checker(); // Run the intrusion checker HLS IP core
   }
 
-  if ((now()) >= CAMERA_SAMPLING_INTERVAL_MS + last_camera_read_ms && (now() != last_camera_read_ms)) {
-    last_camera_read_ms = now();
-    run_camera_module();
-    usleep(100);
-    run_intrusion_checker();
-  }
+  // And ends here
 
   if (auto_advance_time) {
     usleep((TIME_STEP_MS + 100) * 1000);
@@ -213,8 +217,7 @@ void handle_alarmed_state() {
 int main() {
   xil_printf("Initializing Alarm System Application with Pipelining...\r\n");
   initialize_platform();
-  
-  
+
   while (1) {
     switch (current_state) {
     case STATE_INACTIVE:
