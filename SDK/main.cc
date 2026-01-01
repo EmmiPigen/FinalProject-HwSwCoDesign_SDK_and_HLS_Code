@@ -1,5 +1,5 @@
 /*
- * Empty C++ Application
+ * Alarm System Application with Pipelining
  */
 
 #include <cstdlib>
@@ -8,6 +8,8 @@
 #include <xil_printf.h>
 #include <xintrusion_checker.h>
 #include <xparameters.h>
+#include <xtime_l.h>
+#include <stdio.h>
 
 // User defined includes
 #include "Utilities/systemDefinitions.h"
@@ -30,6 +32,10 @@ u32 last_sensors_read_ms = 0;
 u32 last_camera_read_ms = 0;
 bool auto_advance_time = false;
 
+XTime Start_cycle, End_cycle;
+double time_diff_add = 0.0;
+int time_diff_count = 0;
+
 typedef enum {
   STATE_INACTIVE = 0,
   STATE_ACTIVE,
@@ -37,6 +43,10 @@ typedef enum {
 } AlarmState;
 
 AlarmState current_state = STATE_INACTIVE;
+
+void log_state_transistion(AlarmState from, AlarmState to) {
+  xil_printf("STATE TRANSITION: %d -> %d\r\n\n", from, to);
+}
 
 unsigned int now() {
   return manual_ms_counter;
@@ -53,7 +63,7 @@ void write_camera_data_to_hardware(XIntrusion_checker *dev, int i, int j, u32 va
     return;
   }
 
-  int linear_index = (i * N) + j; // Convert 2D index to linear index
+  int linear_index = (i * N) + j;                     // Convert 2D index to linear index
   UINTPTR offset = 0x028 + (UINTPTR)linear_index * 8; // Each entry is 8 bytes apart
 
   XIntrusion_checker_WriteReg(dev->Ctrl_bus_BaseAddress, offset, value); // Write the value to the calculated offset
@@ -83,17 +93,28 @@ void run_camera_module() {
 void run_intrusion_checker() {
   xil_printf("Running Intrusion Checker Hardware Module...\r\n");
 
+  // Mesure the start cycle count
+  XTime_GetTime(&Start_cycle);
+
   XIntrusion_checker_Start(&intrusion_checker);
   while (!XIntrusion_checker_IsDone(&intrusion_checker)) {
-    usleep(1); // Sleep for 1 microsecond to avoid busy waiting
   }
 
   // Retrieve results if needed
   u32 result = XIntrusion_checker_Get_return(&intrusion_checker);
   xil_printf("      Intrusion Checker Result: %u\r\n", result);
 
+  // Mesure the end cycle count
+  XTime_GetTime(&End_cycle);
+  double total_time_ms = (double)(End_cycle - Start_cycle) / (COUNTS_PER_SECOND);
+  time_diff_add += total_time_ms;
+  time_diff_count++;
+  printf("      Intrusion Checker Execution Time (ms): %f ms\r\n", total_time_ms * 1000);
+  printf("      Average Execution Time over %d runs (ms): %f ms\r\n", time_diff_count, (time_diff_add / time_diff_count) * 1000);
+
   if (result) {
     xil_printf("ALARM! Intrusion Detected!\r\n");
+    log_state_transistion(STATE_ACTIVE, STATE_ALARMED);
     current_state = STATE_ALARMED;
   } else {
     xil_printf("\n ------- No Intrusion Detected. -------\r\n");
@@ -133,6 +154,7 @@ void handle_inactive_state() {
 
   if (isValid(pin_code)) {
     xil_printf("      Valid Pin Code Entered. Transitioning to ACTIVE state.\r\n");
+    log_state_transistion(STATE_INACTIVE, STATE_ACTIVE);
     current_state = STATE_ACTIVE;
   } else {
     xil_printf("      Invalid Pin Code. Remaining in INACTIVE state.\r\n");
@@ -197,6 +219,7 @@ void handle_alarmed_state() {
     int pin_code = read_pin_code();
     if (isValid(pin_code)) {
       xil_printf("      Valid Pin Code Entered. Transitioning to ACTIVE state.\r\n");
+      log_state_transistion(STATE_ALARMED, STATE_ACTIVE);
       current_state = STATE_ACTIVE;
       // Turn off LEDs
       XGpio_DiscreteWrite(&leds_gpio, LEDS_CHANNEL, 0x00);
@@ -208,6 +231,7 @@ void handle_alarmed_state() {
     advance_time(1500);
   }
   xil_printf("      Alarm duration elapsed. Transitioning to ACTIVE state.\r\n");
+  log_state_transistion(STATE_ALARMED, STATE_ACTIVE);
   current_state = STATE_ACTIVE;
 
   // Turn off LEDs
@@ -217,6 +241,7 @@ void handle_alarmed_state() {
 int main() {
   xil_printf("Initializing Alarm System Application with Pipelining...\r\n");
   initialize_platform();
+  XTime_SetTime(0); // Initialize the cycle counter
 
   while (1) {
     switch (current_state) {
